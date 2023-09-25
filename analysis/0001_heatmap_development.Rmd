@@ -1,0 +1,379 @@
+---
+title: "Heatmap Development"
+author: "Dan MacLean"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Render results from phos site conservation analysis as a heatmap
+
+The aim of this analysis is to render some results from the phos site conservation into a heatmap and maybe a network.
+
+
+```{r}
+library(here)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+df <- read_csv(here("results/merged_test_sites.csv"),
+               col_types = cols(
+                 phos_site_id = col_character(),
+                 mo_protein_id = col_character(),
+                 species_compared = col_character(),
+                 has_ortholog = col_logical(),
+                 best_hit_ortholog = col_character(),
+                 has_hit_in_ortholog = col_logical(),
+                 best_hit_ortholog_score = col_double(),
+                 best_hit_ortholog_identity = col_character(),
+                 num_p_sites_in_mo = col_integer(),
+                 num_sites_matched_in_ortholog = col_integer(),
+                 sites_found_in_ortho = col_integer(),
+                 mo_peptide = col_character(),
+                 mo_seq_in_hit = col_character(),
+                 orth_seq_in_hit = col_character(),
+                 annotated_seq = col_character(),
+                 mod_pattern = col_character()
+               )
+                 
+               ) |> 
+  transmute(phos_site_id, mo_protein_id, species_compared, has_ortholog, best_hit_ortholog, num_p_sites_in_mo, num_sites_matched_in_ortholog, prop_found = 100 * num_sites_matched_in_ortholog / num_p_sites_in_mo)
+  
+
+```
+
+As well as a summary cluster we want to figgify it, so get pretty names and lifestyle info. 
+
+```{r}
+
+trophism_info <- readr::read_csv(here("lib", "all_proteomes_lifestyles.csv"))  |> rename("Saprotroph"="Saprophyte") |> 
+  select( name, tag, Saprotroph, Endophyte, Symbiont, Commensal,Biotroph, Hemibiotroph, Necrotroph) |> 
+  filter(tag != "Mo8") |> 
+  pivot_longer(cols = c(Saprotroph, Endophyte, Symbiont, Commensal,Biotroph, Hemibiotroph, Necrotroph),names_to = "trophism", values_to = "trophism_val") |> 
+  group_by(trophism, tag) |> 
+  filter(trophism_val == TRUE) |> 
+  summarise( trophism = first(trophism),
+             name = name
+             ) |> 
+  arrange(tag)
+
+appressorium_info <- readr::read_csv(here("lib", "all_proteomes_lifestyles.csv"))  |> 
+  rename("Hyaline" = "Hyaline Appressorium", "Compound"="compound appressorium", "Melanized"="Melanized Appressorium","None"="No appressorium") |>
+  select( name, tag, "Compound", "Hyaline", "Melanized", "None") |>
+  filter(tag != "Mo8") |> 
+  pivot_longer(cols = c("Compound", "Hyaline", "Melanized", "None"), names_to = "appressorium", values_to = "appressorium_val") |> 
+  group_by(appressorium, tag) |> 
+  filter(appressorium_val == TRUE) |> 
+  summarise( appressorium = first(appressorium),
+            name = name) |> 
+  arrange(tag)
+
+pmk1_info <- readr::read_csv(here("lib", "all_proteomes_lifestyles.csv"))  |> 
+  rename("pmk1_path"="Pmk1 pathogenicity") |>
+  filter(tag != "Mo8") |> 
+  mutate("pmk1_path" = if_else(pmk1_path, "PMK1 Required", "PMK1 Not Required")) |> 
+  select( name, tag, "pmk1_path" )
+
+
+df <- left_join(df, appressorium_info, by = c("species_compared"="tag"))
+
+
+```
+
+
+
+
+
+## Check range of values for prop_found and num_p_sites_in_mo
+
+```{r}
+sort(unique(df$num_p_sites_in_mo))
+
+sort(unique(df$prop_found))
+
+sort(unique(df$num_sites_matched_in_ortholog))
+```
+
+## Make a matrix and cluster
+
+```{r}
+wide <- df |> pivot_wider(id_cols = phos_site_id, 
+                  names_from = name,
+                  values_from = prop_found
+                  ) 
+
+tmp <- wide
+phos_site_id <- tmp$phos_site_id
+tmp$phos_site_id <- NULL
+
+prop_mat <- data.matrix(tmp)
+rownames(prop_mat) <- phos_site_id
+
+#HACK! replace NO ORTHOLOG NA wit -1 for cluster
+prop_mat[is.na(prop_mat)] <- -1
+
+
+```
+
+
+
+
+```{r, fig.height=160, fig.width=36, fig.show='hide'}
+
+nr_prop_mat <- prop_mat[rowSums(prop_mat) != -41,]
+```
+
+
+## K-Means
+
+
+Estimate the number of clusters in the rows - how do the phos-sites cluster
+
+```{r}
+library(factoextra)
+fviz_nbclust(nr_prop_mat, kmeans, method="wss", k.max = 50)
+```
+
+Not much improvement after 9. Will use that
+
+```{r}
+kmeans_clust <- kmeans(nr_prop_mat, 9, nstart = 25, iter.max=1000)
+```
+
+### Export gene and cluster info
+
+```{r}
+cluster_sites <- tibble::tibble(
+  phos_site_id = names(kmeans_clust$cluster),
+  cluster_number = kmeans_clust$cluster
+)
+saveRDS(kmeans_clust, here("results/kmeans.RDS"))
+annot_df <- df |> left_join(cluster_sites, by="phos_site_id")
+readr::write_csv(annot_df, "cluster_gene_info.csv")
+```
+
+
+
+
+### Draw summary clusters
+
+We want quite a lot out of this. First I want to know how many clusters the summary data has in the columns. IE how do the species cluster given the row clustering.
+
+
+```{r}
+
+fviz_nbclust(t(kmeans_clust$centers), kmeans, method="wss", k.max =39)
+```
+About 7 or about 15 clusters
+
+
+```{r}
+set.seed(123)
+kmean_tmp <- ComplexHeatmap::Heatmap(kmeans_clust$centers)
+species_order <- colnames(kmeans_clust$centers)#[order.dendrogram(ComplexHeatmap::column_dend(kmean_tmp))]
+
+info <- tibble::tibble(
+  name = species_order
+) |> 
+  left_join(trophism_info, by = "name") |> 
+  left_join(appressorium_info, by = "name") |> 
+  left_join(pmk1_info, by = "name")
+  
+
+```
+### Work out counts of Phos sites from other experiments in each cluster.
+
+We calculated clusters in a Col-0 DMPK1 dataset previously. The cluster 2 and 3 there were of interest and we'd like to see how the phos-sites in those cluster map to the clusters here. We'll need to count phos-sites from those in each of the clusters here. The cluster info to take from is in `raw/010_kmeans_cluster_3_on_guy11_and_dpmk1.csv` and `010_kmeans_cluster_4_on_guy11_and_dpmk1.csv`. The IDs will need converting.
+
+```{r}
+
+library(here)
+library(dplyr)
+convert_ids <- function(df) {
+  # convert site data from cluster in format "MGG_01258T0 [68-87]-2xPhospho [S7(100); T14(100)]" 
+  # to site data in phos-cons format MGG_00111T0-S13-S16
+  
+  # Note that the phos sites without positions 
+  # "MGG_04185T0 [225-250]-1xPhospho [S/T]" 
+  # come out as MGG_04185T0-NA so are not mappable to the IDs in the phos-cons data
+  # which are like MGG_00111T0-S13-S16
+  df <- df |> 
+    mutate(gene = substr(id, 1, 11),
+           offset = stringr::str_extract(id, "\\[\\d+-\\d+\\]")
+           ) |> 
+    tidyr::separate_wider_delim(offset, names = c("start", "stop"), delim = "-") |> 
+    mutate(
+           start = stringr::str_remove(start,"\\["),
+           start = as.integer(start),
+           stop = stringr::str_remove(stop, "\\]"),
+           stop = as.integer(stop),
+           sites = stringr::str_extract(id, "\\[[STY]\\d+.*\\]"),
+           sites = stringr::str_remove_all(sites, "\\(\\d+\\)"),
+           sites = stringr::str_remove_all(sites, "\\(\\d+\\.\\d+\\)"),
+           sites = stringr::str_remove_all(sites, "\\["),
+           sites = stringr::str_remove_all(sites, "\\]"),
+           sites = stringr::str_extract_all(sites, "[STY]\\d+"),
+           site_letters = purrr::map(sites, function(x){stringr::str_extract(x, "[STY]")}),
+           site_numbers = purrr::map(sites, function(x){as.integer(stringr::str_extract(x, "\\d+"))}),
+           proper_starts = purrr::map2(site_numbers, start, function(x,y){ (x + y)-1 }),
+           site_and_start = purrr::map2(proper_starts, site_letters, function(x,y){paste0(y,x)}),
+           sites = purrr::map_chr(site_and_start, function(x){paste0(x, collapse="-")}),
+           new_id = paste(gene, sites, sep="-")
+    )  |> 
+    select(id, gene, new_id)
+}
+
+clus1 <- readr::read_csv(here("raw/010_kmeans_cluster_1_on_guy11_and_dpmk1.csv")) |>  
+  convert_ids()
+
+clus3 <- readr::read_csv(here("raw/010_kmeans_cluster_3_on_guy11_and_dpmk1.csv")) |>  
+  convert_ids()
+
+clus4 <- readr::read_csv(here("raw/010_kmeans_cluster_4_on_guy11_and_dpmk1.csv")) |> 
+  convert_ids()
+```
+Now loop through clusters of phos-cons data and work out how many of `clus3` and `clus4` IDs are in each.
+
+```{r}
+counts_in_clusters <- cluster_sites |> 
+  group_by(cluster_number) |> 
+  summarize( cluster_size = length(cluster_number),
+             num_in_clus1 = sum(clus1$new_id %in% phos_site_id),
+            prop_in_clus1 = num_in_clus1 / cluster_size,
+            clus1_size = 1113, 
+            
+            num_in_clus3 = sum(clus3$new_id %in% phos_site_id),
+            prop_in_clus3 = num_in_clus3 / cluster_size,
+            clus3_size = 1281,
+            
+            num_in_clus4 = sum(clus4$new_id %in% phos_site_id),
+            prop_in_clus4 = num_in_clus4 / cluster_size,
+            clus4_size = 861,
+            total_phos_sites = nrow(prop_mat),
+            
+            pclus1 = phyper(num_in_clus1, clus1_size, total_phos_sites - clus1_size, cluster_size ),
+            padj.clus1 = p.adjust(pclus1),
+            pclus3 = phyper(num_in_clus3, clus3_size, total_phos_sites - clus3_size, cluster_size ),
+            padj.clus3 = p.adjust(pclus3),
+            pclus4 = phyper(num_in_clus4, clus4_size, total_phos_sites - clus4_size, cluster_size ),
+            padj.clus4 = p.adjust(pclus4)
+            )
+counts_in_clusters 
+
+readr::write_csv(counts_in_clusters, here("results/counts_in_outside_clusters.csv"))
+```
+Looks like a fairly low number of phos-sites
+
+### PLot the large annotated summary cluster graph
+
+```{r, fig.width=14, fig.height=8}
+set.seed(123)
+col_fun = circlize::colorRamp2(
+                            c(-1,0,33, 50, 100),
+                            c("gray", "white", "#FDE725FF", "#238A8DFF",  "#440154FF")
+                          
+        )
+
+
+troph_cols <- c("Biotroph" = "#b2df8a",
+                "Commensal" = "#e1d5c4",
+                "Endophyte" = "#80493C",
+                "Hemibiotroph" = "#33a02c",
+                "Necrotroph" = "#075C07",
+                "Saprotroph" = "#542519",
+                "Symbiont" = "yellow"
+                )
+app_cols <- c("Compound" = "lightblue", 
+  "Hyaline" = "pink", 
+  "Melanized" = "brown", 
+  "None" = "gray")
+#app_cols <- c("Melanized" = "brown",
+#              "Non-melanized"= "wheat",
+#              "None" = "gray")
+
+pmk1_cols <- c("PMK1 Required" = "red", "PMK1 Not Required" = "white")
+
+kmean_summ <- ComplexHeatmap::Heatmap(kmeans_clust$centers,
+                        col = col_fun,
+                        bottom_annotation = ComplexHeatmap::HeatmapAnnotation(
+                          Lifestyle = info$trophism, 
+                          Appressorium = info$appressorium,
+                          PMK1 = info$pmk1_path,
+                          col =list(Lifestyle=troph_cols,
+                                    Appressorium = app_cols,
+                                    PMK1=pmk1_cols) 
+                         ), 
+                        left_annotation = ComplexHeatmap::rowAnnotation(
+                         `Prop in Cluster 3` =  counts_in_clusters$prop_in_clus3,
+                         `Prop in Cluster 4` =  counts_in_clusters$prop_in_clus4
+                        ),
+                        show_heatmap_legend = FALSE)
+lgd <- ComplexHeatmap::Legend(direction = "vertical",
+  col_fun = col_fun,
+  #labels = c("No hit", 0, 33, 50, 100),
+  
+  title = "Percent target phos sites found")
+
+col_order <- ComplexHeatmap::column_dend(kmean_summ)
+
+
+
+ComplexHeatmap::draw(kmean_summ,padding= grid::unit(c(0,0,0,3), "in"))
+ComplexHeatmap::draw(lgd, x = grid::unit(12.5, "in"), y = grid::unit(4, "in"))
+
+```
+
+
+### Export column dendrogram
+
+```{r}
+species_tree <- ComplexHeatmap::column_dend(kmean_summ)
+saveRDS(species_tree, here::here("results/heatmap_species_dendro.RDS"))
+```
+
+
+### Cluster Sizes:
+
+Number of phos sites in each cluster
+
+```{r}
+table(kmeans_clust$cluster)
+```
+
+### Draw individual clusters
+
+
+```{r, fig.width=12, fig.height=18}
+biggest_cluster <- which.max(kmeans_clust$size) #assume biggest cluster is all the empty hits
+for (i in 1:max(kmeans_clust$cluster)) {
+  if (i != biggest_cluster) {
+    
+    
+    
+    rows <- kmeans_clust$clust == i
+    mini_mat <- nr_prop_mat[rows,]
+    #print(ncol(mini_mat))
+    mini_hm <- ComplexHeatmap::Heatmap(mini_mat,
+                        col = col_fun,
+                        column_order = order.dendrogram(col_order),
+                        show_heatmap_legend = FALSE)
+    lgd <- ComplexHeatmap::Legend(direction = "vertical",
+    col_fun = col_fun,
+    #labels = c("No hit", 0, 50, 100),
+  
+    title = paste0("Cluster ", i, " Percent target phos sites found")
+    )
+    ComplexHeatmap::draw(mini_hm,padding= grid::unit(c(0,0,0,3), "in"))
+    ComplexHeatmap::draw(lgd, x = grid::unit(10.5, "in"), y = grid::unit(4, "in"))
+  }
+}
+```
+
+
+
+

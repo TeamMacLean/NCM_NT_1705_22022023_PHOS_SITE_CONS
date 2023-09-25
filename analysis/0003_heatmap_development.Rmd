@@ -1,0 +1,239 @@
+---
+title: "Heatmap Development"
+author: "Dan MacLean"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Render results from phos site conservation analysis not as a heatmap but something different
+
+The aim of this analysis is to render the results from the phos site conservation into a plot that is not a heatmap and is maybe more readable. We already have the cluster and lifestyle information in files from `0001_heatmap_development.Rmd` so we can read and add that in to get the data
+
+
+### Read the phos-site information
+
+```{r}
+library(here)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+
+df <- read_csv(here("results/merged_test_sites.csv"),
+               col_types = cols(
+                 phos_site_id = col_character(),
+                 mo_protein_id = col_character(),
+                 species_compared = col_character(),
+                 has_ortholog = col_logical(),
+                 best_hit_ortholog = col_character(),
+                 has_hit_in_ortholog = col_logical(),
+                 best_hit_ortholog_score = col_double(),
+                 best_hit_ortholog_identity = col_character(),
+                 num_p_sites_in_mo = col_integer(),
+                 num_sites_matched_in_ortholog = col_integer(),
+                 sites_found_in_ortho = col_integer(),
+                 mo_peptide = col_character(),
+                 mo_seq_in_hit = col_character(),
+                 orth_seq_in_hit = col_character(),
+                 annotated_seq = col_character(),
+                 mod_pattern = col_character()
+               )
+                 
+               ) |> 
+  transmute(phos_site_id, mo_protein_id, species_compared, has_ortholog, best_hit_ortholog, num_p_sites_in_mo, num_sites_matched_in_ortholog, prop_found = 100 * num_sites_matched_in_ortholog / num_p_sites_in_mo)
+  
+
+```
+
+### Load in the lifestyle info
+
+```{r}
+
+trophism_info <- readr::read_csv(here("lib", "all_proteomes_lifestyles.csv"))  |> rename("Saprotroph"="Saprophyte") |> 
+  select( name, tag, Saprotroph, Endophyte, Symbiont, Commensal,Biotroph, Hemibiotroph, Necrotroph) |> 
+  filter(tag != "Mo8") |> 
+  pivot_longer(cols = c(Saprotroph, Endophyte, Symbiont, Commensal,Biotroph, Hemibiotroph, Necrotroph),names_to = "trophism", values_to = "trophism_val") |> 
+  group_by(trophism, tag) |> 
+  filter(trophism_val == TRUE) |> 
+  summarise( trophism = first(trophism)
+             ) |> 
+  arrange(tag)
+
+appressorium_info <- readr::read_csv(here("lib", "all_proteomes_lifestyles.csv"))  |> 
+  rename("Hyaline" = "Hyaline Appressorium", "Compound"="compound appressorium", "Melanized"="Melanized Appressorium","None"="No appressorium") |>
+  select( name, tag, "Compound", "Hyaline", "Melanized", "None") |>
+  filter(tag != "Mo8") |> 
+  pivot_longer(cols = c("Compound", "Hyaline", "Melanized", "None"), names_to = "appressorium", values_to = "appressorium_val") |> 
+  group_by(appressorium, tag) |> 
+  filter(appressorium_val == TRUE) |> 
+  summarise( appressorium = first(appressorium),
+             name = name) |> 
+  arrange(tag)
+
+pmk1_info <- readr::read_csv(here("lib", "all_proteomes_lifestyles.csv"))  |> 
+  rename("pmk1_path"="Pmk1 pathogenicity") |>
+  filter(tag != "Mo8") |> 
+  mutate("pmk1_path" = if_else(pmk1_path, "PMK1 Required", "PMK1 Not Required")) |> 
+  select( tag, "pmk1_path" )
+
+
+df <- left_join(df, appressorium_info, by = c("species_compared"="tag"))  |> 
+  left_join(trophism_info,by = c("species_compared"="tag" )) |> 
+  left_join(pmk1_info, by = c("species_compared"="tag")) 
+
+
+```
+
+### Add the cluster number
+
+```{r}
+clus <- read_csv(here("analysis/cluster_gene_info.csv")) |> 
+  select(phos_site_id, cluster_number) |> 
+  unique() |> 
+  filter(! is.na(cluster_number))
+
+df <- left_join(df, clus) |> unique()
+```
+```{r}
+wide <- df |> pivot_wider(id_cols = phos_site_id, 
+                  names_from = name,
+                  values_from = prop_found
+                  ) 
+```
+
+
+
+
+```{r, fig.height=12}
+library(ggplot2)
+
+col_order <- c("C.higginsianum", "C.fructicola", "C.gloeosporioides",
+                "V.mali", "C.chrysosperma", "V.dahliae", 
+                "N.crassa", "C.purpurea", "F.oxysporum-C.alt",
+                "F.oxysporum-5176", "F.verticillioides", "F.oxysporum-2",
+                "F.graminearum", "B.cinerea", "S.sclerotiorum",
+                "U.virens", "P.oxalicum", "A.fumigatus", "A.flavus",
+                "A.nidulans", "H.capsulatum", "B.graminis", "Z.tritici",
+                "B.sorokiniana", "B.oryzae","C.heterostrophus", "S.turcica",
+                "P.teres", "A.alternata", "S.nodorum","A.brassicicola",
+                "P.pachyrhizi", "S.cerevisiae", "U.maydis","C.neoformans",
+                "P.striiformis", "P.graminis", "R.irregularis", "C.albicans",
+                "P.indica", "S.pombe")
+row_order <- c(4,9,6,3,5,2,1,7,8)
+
+
+dist_means <- df |> 
+  group_by(name, cluster_number) |> 
+  summarize(mean_prop = mean(prop_found, na.rm=TRUE)) |> 
+  ungroup()
+
+bg_data <- tibble(xmin = c(3 ,7), xmax=c(5,10), ymax=c(33,66), ymin=c(0,33))
+
+base <- df |> 
+  filter(! is.na(cluster_number)) |> 
+  left_join(dist_means, by=c("name"="name","cluster_number"="cluster_number")) |> 
+  mutate(
+    name = factor(name, level=col_order),
+    cluster_number = factor(cluster_number, level=row_order)
+    ) |> 
+  ggplot() +
+  aes(name, prop_found) +
+  #geom_violin(aes(fill = appressorium)) +
+  #geom_line(data=dist_means, mapping=aes(x=name, y= mean_prop, group=1), size=2) +
+  #geom_tile(aes(fill= mean_prop)) +
+  #scale_fill_brewer(type="qual") +
+  #scale_color_viridis_d(direction= -1) + 
+  facet_wrap( ~ cluster_number, ncol=1, strip.position = "left" ) + 
+  theme_void() + 
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1)) #+
+  #geom_rect( data= bg_data, mapping=aes(xmin = xmin, xmax=xmax, ymax=xmax, ymin=ymin ) )
+```
+
+
+```{r, fig.height=9, fig.width=12}
+
+base + geom_violin(fill="steelblue", aes(alpha=mean_prop/100))
+
+base + 
+    geom_violin(aes(fill = appressorium,alpha=mean_prop/100)) +
+    scale_fill_brewer(type="qual", palette="Set1") 
+
+base + 
+    geom_violin(aes(fill = pmk1_path,alpha=mean_prop/100)) +
+    scale_fill_brewer(type="qual", palette="Set2") 
+
+base + 
+    geom_violin(aes(fill = trophism,alpha=mean_prop/100)) +
+    scale_fill_brewer(type="qual", palette="Set3") 
+
+
+  
+```
+
+
+
+Frank hates violins.
+
+```{r, fig.height=9, fig.width=12}
+
+base + geom_boxplot()
+
+base + 
+    geom_boxplot(aes(fill = appressorium)) +
+    scale_fill_brewer(type="qual", palette="Set1") 
+
+base + 
+    geom_boxplot(aes(fill = pmk1_path)) +
+    scale_fill_brewer(type="qual", palette="Set2") 
+
+base + 
+    geom_boxplot(aes(fill = trophism)) +
+    scale_fill_brewer(type="qual", palette="Set3") 
+
+
+  
+```
+
+
+```{r, fig.height=9, fig.width=12}
+
+base <- df |> 
+  select(name, appressorium, trophism, pmk1_path) |> 
+  distinct() |> 
+  right_join(dist_means) |> 
+  mutate(
+    name = factor(name, level=col_order),
+    cluster_number = factor(cluster_number, level=rev(row_order))
+    )  |>
+    filter(! is.na(cluster_number)) |> 
+ggplot() +
+  aes(name, cluster_number ) +
+#  geom_point(aes(size=mean_prop, colour=appressorium, alpha=mean_prop/100))   + 
+  scale_y_discrete(expand=c(0,10)) +
+  theme_void() + 
+  theme(axis.text.x = element_text(angle=90, vjust=.5, hjust=1),
+        axis.text.y = element_text(size=12),
+        plot.margin = unit(c(-2,0.5,0.5,0.5), "cm")
+        )
+
+base +
+  geom_point(fill="steelblue", aes(size=mean_prop, alpha=mean_prop/100)) 
+  
+base + 
+  geom_point(aes(size=mean_prop, colour=appressorium, alpha=mean_prop/100)) 
+
+base + 
+  geom_point(aes(size=mean_prop, colour=pmk1_path, alpha=mean_prop/100)) 
+
+base +
+  geom_point(aes(size=mean_prop, colour=trophism, alpha=mean_prop/100)) 
+
+
+  
+```
+
+

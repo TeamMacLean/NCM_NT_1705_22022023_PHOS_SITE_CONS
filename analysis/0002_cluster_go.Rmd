@@ -1,0 +1,43 @@
+---
+title: "0002_cluster_GO"
+author: "Dan MacLean"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Read in cluster info from previous analysis
+
+The cluster information is generated in `0001_heatmap_development.Rmd` so we can load the information from there
+
+```{r}
+library(here)
+
+df <- readr::read_csv(here("analysis", "cluster_gene_info.csv")) |> 
+  dplyr::select(mo_protein_id, cluster_number) |> 
+  dplyr::distinct() |> 
+  dplyr::mutate(mo_protein_id = substr(mo_protein_id, 1, 9))
+```
+
+## Run a basic GO analysis on each cluster.
+
+```{r}
+library(mogo)
+
+proteins <- lapply(1:max(df$cluster_number, na.rm=TRUE), function(x){subset(df, cluster_number == x)})
+
+
+do_go <- function(d) {
+  #terms <- fs::path_package("extdata", "MG8_mart_export.txt", package="mogo")
+  e <- do_enrich(d$mo_protein_id)#, termsfile=terms)
+  clus_num <- d$cluster_number[1]
+  file <- paste0("cluster_go_info/cluster_", clus_num, ".csv")
+  readr::write_csv(data.frame(e), file)
+  enrichplot::dotplot(e, title = paste0("Cluster ", clus_num))
+}
+lapply(proteins, do_go)
+```
+

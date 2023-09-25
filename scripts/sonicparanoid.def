@@ -1,0 +1,44 @@
+BootStrap: yum
+OSVersion: 7
+MirrorURL: http://yum-repos.hpccluster/centos/7/os/$basearch/
+Include: yum
+UpdateURL: http://yum-repos.hpccluster/centos/7/updates/$basearch/
+
+%labels
+# Uncomment the below lines and customise as necessary
+# maintainer macleand
+# Institute TSL
+# install-version 1.0
+# application sonicparanoid
+# applicationversion 7.8.5
+# provides sonicparanoid
+
+%environment
+export PATH=/opt/anaconda_package/bin:$PATH
+
+%post
+yum install -y nano which
+cd /opt
+curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash ./Miniconda3-latest-Linux-x86_64.sh -b -p /opt/miniconda3
+/opt/miniconda3/bin/conda config --add channels defaults
+/opt/miniconda3/bin/conda config --add channels bioconda
+/opt/miniconda3/bin/conda config --add channels conda-forge
+# The following line adds conda packages. (Note: mamba is a package to help install other packages.)
+/opt/miniconda3/bin/conda create -y -c conda-forge -p /opt/anaconda_package mamba sonicparanoid
+/opt/miniconda3/bin/conda install -c bioconda -p /opt/anaconda_package mamba sonicparanoid
+
+
+chmod 777 /
+chmod 777 /opt
+chmod 777 /opt/anaconda_package
+chmod 777 /opt/anaconda_package/bin
+chmod 777 /opt/anaconda_package/bin/*
+echo "export PATH=/opt/anaconda_package/bin:\$PATH" >>$SINGULARITY_ENVIRONMENT
+export PATH=/opt/anaconda_package/bin:$PATH
+
+sonicparanoid-get-test-data -o .
+# sonicparanoid -i ./test_input -o ./test_output -p my_first_run -t 4
+
+cd /opt/sonicparanoid_test/
+sonicparanoid -i ./test_input -o ./test_output -m fast -t 4

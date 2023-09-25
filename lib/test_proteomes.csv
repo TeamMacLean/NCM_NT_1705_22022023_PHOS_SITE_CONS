@@ -1,0 +1,4 @@
+species_strain,version,tag,source,path
+magnaporthe_oryzae,MG8,Mo8,https://ftp.ebi.ac.uk/ensemblgenomes/pub/release-56/fungi/fasta/magnaporthe_oryzae/pep/Magnaporthe_oryzae.MG8.pep.all.fa.gz,/tsl/scratch/macleand/phos_cons/proteomes/Magnaporthe_oryzae.MG8.pep.all.fa
+saccharomyces_cerevisiae,ScR64-1-1,Sc64,https://ftp.ebi.ac.uk/ensemblgenomes/pub/release-56/fungi/fasta/saccharomyces_cerevisiae/pep/Saccharomyces_cerevisiae.R64-1-1.pep.all.fa.gz,/tsl/scratch/macleand/phos_cons/proteomes/Saccharomyces_cerevisiae.R64-1-1.pep.all.fa
+fusarium_oxysporum_fo5176,GCA_000222805.1,fo5176,https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/reference_proteomes/Eukaryota/UP000002489/UP000002489_660025.fasta.gz,/tsl/scratch/macleand/phos_cons/proteomes/UP000002489_660025.fasta
